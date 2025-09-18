@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>오프라인 판서 (Offline Whiteboard)</title>
+  <style>
+    body{font-family:system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", "Helvetica Neue", Arial; margin:0; display:flex; height:100vh;}
+    #sidebar{width:320px; padding:12px; box-sizing:border-box; border-right:1px solid #ddd; background:#fafafa}
+    h2{margin:6px 0 12px}
+    label{display:block; margin:8px 0 4px; font-size:13px}
+    .controls{display:flex; gap:8px; flex-wrap:wrap}
+    button, select, input[type=range], input[type=color]{padding:8px; font-size:14px}
+    #canvasWrap{flex:1; display:flex; align-items:stretch; justify-content:center; background:#eee}
+    canvas{background:#fff; margin:12px; box-shadow:0 4px 14px rgba(0,0,0,0.08); border-radius:6px}
+    .tool{padding:8px 10px; border:1px solid #ddd; background:white; cursor:pointer; border-radius:6px}
+    .tool.active{border-color:#2b8cff; box-shadow:0 6px 18px rgba(43,140,255,0.12)}
+    .row{display:flex; gap:8px; align-items:center}
+  </style>
+</head>
+<body>
+  <aside id="sidebar">
+    <h2>오프라인 판서</h2>
+    <div class="row">
+      <div style="display:flex; gap:6px; flex-wrap:wrap">
+        <button class="tool active" data-tool="pen">자유필기</button>
+        <button class="tool" data-tool="line">선</button>
+        <button class="tool" data-tool="rect">사각형</button>
+        <button class="tool" data-tool="circle">원</button>
+        <button class="tool" data-tool="triangle">삼각형</button>
+        <button class="tool" data-tool="diamond">마름모</button>
+      </div>
+    </div>
+
+    <label>색상</label>
+    <input type="color" id="color" value="#000000">
+
+    <label>투명도 (<span id="alphaVal">1.00</span>)</label>
+    <input type="range" id="alpha" min="0" max="1" step="0.01" value="1">
+
+    <label>선 굵기 (<span id="widthVal">4</span>px)</label>
+    <input type="range" id="width" min="1" max="60" step="1" value="4">
+
+    <label>채우기</label>
+    <div class="row">
+      <select id="fillMode">
+        <option value="stroke">외곽선 (Stroke)</option>
+        <option value="fill">채우기 (Fill)</option>
+        <option value="both">둘다 (Fill + Stroke)</option>
+      </select>
+    </div>
+
+    <label>기능</label>
+    <div style="display:flex; gap:8px; margin-top:6px; flex-wrap:wrap">
+      <button id="undo" class="tool">실행 취소</button>
+      <button id="clear" class="tool">전체 지우기</button>
+      <button id="download" class="tool">PNG로 저장</button>
+    </div>
+
+    <hr style="margin:12px 0">
+    <small>사용법: 도구를 선택 → 캔버스 클릭 & 드래그. 자유필기는 클릭 후 드래그.</small>
+  </aside>
+
+  <div id="canvasWrap">
+    <canvas id="c"></canvas>
+  </div>
+
+  <script>
+    // 기본 캔버스 설정
+    const canvas = document.getElementById('c');
+    const ctx = canvas.getContext('2d');
+    function resize(){
+      const dpr = window.devicePixelRatio || 1;
+      const rect = canvas.parentElement.getBoundingClientRect();
+      canvas.width = Math.max(600, Math.floor(rect.width - 40));
+      canvas.height = Math.max(400, Math.floor(rect.height - 24));
+      canvas.style.width = canvas.width + 'px';
+      canvas.style.height = canvas.height + 'px';
+      redraw();
+    }
+    window.addEventListener('resize', resize);
+
+    // UI
+    const tools = document.querySelectorAll('.tool[data-tool]');
+    let currentTool = 'pen';
+    tools.forEach(b=>b.addEventListener('click', ()=>{tools.forEach(x=>x.classList.remove('active')); b.classList.add('active'); currentTool = b.dataset.tool;}));
+
+    const colorInput = document.getElementById('color');
+    const alphaInput = document.getElementById('alpha');
+    const widthInput = document.getElementById('width');
+    const fillMode = document.getElementById('fillMode');
+    const alphaVal = document.getElementById('alphaVal');
+    const widthVal = document.getElementById('widthVal');
+    alphaInput.addEventListener('input', ()=>{alphaVal.textContent = Number(alphaInput.value).toFixed(2)});
+    widthInput.addEventListener('input', ()=>{widthVal.textContent = widthInput.value});
+
+    // 상태 저장 (간단한 스냅샷 방식)
+    const history = [];
+    function saveHistory(){
+      try{
+        history.push(canvas.toDataURL());
+        if(history.length>50) history.shift();
+      }catch(e){console.warn(e)}
+    }
+    function undo(){
+      if(history.length===0) return; history.pop();
+      const data = history[history.length-1];
+      const img = new Image();
+      img.onload = ()=>{ctx.clearRect(0,0,canvas.width,canvas.height); ctx.drawImage(img,0,0);}
+      if(data) img.src = data; else ctx.clearRect(0,0,canvas.width,canvas.height);
+    }
+    document.getElementById('undo').addEventListener('click', undo);
+
+    document.getElementById('clear').addEventListener('click', ()=>{saveHistory(); ctx.clearRect(0,0,canvas.width,canvas.height)});
+
+    document.getElementById('download').addEventListener('click', ()=>{
+      const link = document.createElement('a');
+      link.download = 'offline_whiteboard.png';
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+    });
+
+    // 그리기 로직
+    let drawing = false;
+    let startX=0, startY=0;
+    let points = [];
+
+    function rgba(hex, alpha){
+      const h = hex.replace('#','');
+      const bigint = parseInt(h,16);
+      const r = (bigint >> 16) & 255;
+      const g = (bigint >> 8) & 255;
+      const b = bigint & 255;
+      return `rgba(${r},${g},${b},${alpha})`;
+    }
+
+    canvas.addEventListener('mousedown', e=>{
+      const rect = canvas.getBoundingClientRect();
+      startX = Math.round((e.clientX - rect.left));
+      startY = Math.round((e.clientY - rect.top));
+      drawing = true;
+      points = [{x:startX,y:startY}];
+      if(currentTool==='pen'){
+        ctx.beginPath(); ctx.moveTo(startX, startY);
+        applyStyle();
+      }
+    });
+
+    canvas.addEventListener('mousemove', e=>{
+      if(!drawing) return;
+      const rect = canvas.getBoundingClientRect();
+      const x = Math.round((e.clientX - rect.left));
+      const y = Math.round((e.clientY - rect.top));
+      if(currentTool==='pen'){
+        ctx.lineTo(x,y);
+        ctx.stroke();
+      }else{
+        // 빠른 피드백: 스냅샷을 그리고 다시 그리기
+        redraw();
+        drawPreview(startX, startY, x, y);
+      }
+      points.push({x,y});
+    });
+
+    canvas.addEventListener('mouseup', e=>{ if(drawing){ onPointerUp(e); }});
+    canvas.addEventListener('mouseleave', e=>{ if(drawing){ onPointerUp(e); }});
+
+    function onPointerUp(e){
+      drawing = false;
+      const rect = canvas.getBoundingClientRect();
+      const endX = Math.round((e.clientX - rect.left));
+      const endY = Math.round((e.clientY - rect.top));
+      if(currentTool==='pen'){
+        ctx.closePath();
+        saveHistory();
+      }else{
+        drawFinal(startX, startY, endX, endY);
+        saveHistory();
+      }
+    }
+
+    function applyStyle(){
+      ctx.lineWidth = Number(widthInput.value);
+      ctx.strokeStyle = rgba(colorInput.value, alphaInput.value);
+      ctx.fillStyle = rgba(colorInput.value, alphaInput.value);
+      ctx.lineJoin = ctx.lineCap = 'round';
+    }
+
+    function drawPreview(sx, sy, ex, ey){
+      applyStyle();
+      const w = ex - sx, h = ey - sy;
+      if(currentTool==='line'){
+        ctx.beginPath(); ctx.moveTo(sx,sy); ctx.lineTo(ex,ey); ctx.stroke(); ctx.closePath();
+      }else if(currentTool==='rect'){
+        if(fillMode.value==='fill' || fillMode.value==='both') ctx.fillRect(sx, sy, w, h);
+        if(fillMode.value==='stroke' || fillMode.value==='both') ctx.strokeRect(sx, sy, w, h);
+      }else if(currentTool==='circle'){
+        ctx.beginPath(); const rx = Math.abs(w)/2; const ry = Math.abs(h)/2; const cx = sx + w/2; const cy = sy + h/2;
+        ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI*2);
+        if(fillMode.value==='fill' || fillMode.value==='both') ctx.fill();
+        if(fillMode.value==='stroke' || fillMode.value==='both') ctx.stroke(); ctx.closePath();
+      }else if(currentTool==='triangle'){
+        ctx.beginPath(); ctx.moveTo(sx + w/2, sy); ctx.lineTo(sx, sy + h); ctx.lineTo(sx + w, sy + h); ctx.closePath();
+        if(fillMode.value==='fill' || fillMode.value==='both') ctx.fill();
+        if(fillMode.value==='stroke' || fillMode.value==='both') ctx.stroke();
+      }else if(currentTool==='diamond'){
+        ctx.beginPath(); ctx.moveTo(sx + w/2, sy); ctx.lineTo(sx + w, sy + h/2); ctx.lineTo(sx + w/2, sy + h); ctx.lineTo(sx, sy + h/2); ctx.closePath();
+        if(fillMode.value==='fill' || fillMode.value==='both') ctx.fill();
+        if(fillMode.value==='stroke' || fillMode.value==='both') ctx.stroke();
+      }
+    }
+
+    function drawFinal(sx, sy, ex, ey){
+      applyStyle();
+      const w = ex - sx, h = ey - sy;
+      if(currentTool==='line'){
+        ctx.beginPath(); ctx.moveTo(sx,sy); ctx.lineTo(ex,ey); ctx.stroke(); ctx.closePath();
+      }else if(currentTool==='rect'){
+        if(fillMode.value==='fill' || fillMode.value==='both') ctx.fillRect(sx, sy, w, h);
+        if(fillMode.value==='stroke' || fillMode.value==='both') ctx.strokeRect(sx, sy, w, h);
+      }else if(currentTool==='circle'){
+        ctx.beginPath(); const rx = Math.abs(w)/2; const ry = Math.abs(h)/2; const cx = sx + w/2; const cy = sy + h/2;
+        ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI*2);
+        if(fillMode.value==='fill' || fillMode.value==='both') ctx.fill();
+        if(fillMode.value==='stroke' || fillMode.value==='both') ctx.stroke(); ctx.closePath();
+      }else if(currentTool==='triangle'){
+        ctx.beginPath(); ctx.moveTo(sx + w/2, sy); ctx.lineTo(sx, sy + h); ctx.lineTo(sx + w, sy + h); ctx.closePath();
+        if(fillMode.value==='fill' || fillMode.value==='both') ctx.fill();
+        if(fillMode.value==='stroke' || fillMode.value==='both') ctx.stroke();
+      }else if(currentTool==='diamond'){
+        ctx.beginPath(); ctx.moveTo(sx + w/2, sy); ctx.lineTo(sx + w, sy + h/2); ctx.lineTo(sx + w/2, sy + h); ctx.lineTo(sx, sy + h/2); ctx.closePath();
+        if(fillMode.value==='fill' || fillMode.value==='both') ctx.fill();
+        if(fillMode.value==='stroke' || fillMode.value==='both') ctx.stroke();
+      }
+    }
+
+    // 캔버스에 저장된 스냅샷을 다시그리기
+    function redraw(){
+      // nothing fancy: no background image feature
+      // clear then draw last snapshot if present
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      if(history.length>0){
+        const img = new Image(); img.onload = ()=>{ctx.drawImage(img,0,0)}; img.src = history[history.length-1];
+      }
+    }
+
+    // 입력 변경 시 펜 스타일 즉시 반영
+    [colorInput, alphaInput, widthInput, fillMode].forEach(el=>el.addEventListener('change', ()=>{applyStyle(); redraw();}));
+
+    // 초기화
+    resize();
+    // 초기 히스토리(비어있음)
+    saveHistory();
+  </script>
+</body>
+</html>

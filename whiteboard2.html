@@ -1,0 +1,421 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>오프라인 판서 도구 — 다크모드 포함</title>
+<style>
+  :root{
+    --bg:#f6f7fb; --panel:#ffffff; --text:#0b1220; --muted:#6b7280; --accent:#06b6d4;
+  }
+  [data-theme="dark"]{ --bg:#0b1020; --panel:#0f1724; --text:#e6eef8; --muted:#9aa6bf; --accent:#7c3aed; }
+  *{box-sizing:border-box;font-family:Inter,Segoe UI,Roboto,Apple SD Gothic Neo,Malgun Gothic,Arial}
+  html,body{height:100%;margin:0;background:var(--bg);color:var(--text)}
+  .app{display:flex;gap:12px;height:100vh;padding:12px}
+  .panel{width:320px;background:var(--panel);border-radius:12px;padding:12px;box-shadow:0 6px 20px rgba(2,6,23,0.12);display:flex;flex-direction:column}
+  .canvas-wrap{flex:1;position:relative;border-radius:12px;overflow:hidden;box-shadow:inset 0 0 0 1px rgba(0,0,0,0.04)}
+  canvas{display:block;width:100%;height:100%;touch-action:none;}
+  .controls{display:flex;flex-direction:column;gap:8px}
+  label{font-size:13px;color:var(--muted)}
+  .tool-row{display:flex;gap:8px;flex-wrap:wrap}
+  button,select,input[type=range]{background:transparent;border:1px solid rgba(0,0,0,0.06);padding:8px;border-radius:8px;color:var(--text);cursor:pointer}
+  [data-theme="dark"] button, [data-theme="dark"] select, [data-theme="dark"] input[type=range]{border-color:rgba(255,255,255,0.06)}
+  .big-btn{padding:10px 12px;font-weight:600}
+  .color-row{display:flex;gap:8px;align-items:center}
+  .swatch{width:28px;height:28px;border-radius:6px;border:1px solid rgba(0,0,0,0.08);cursor:pointer}
+  .swatch.selected{outline:3px solid rgba(6,182,212,0.18)}
+  .footer{display:flex;gap:8px;margin-top:auto;align-items:center}
+  .logo{font-weight:700}
+  .inline{display:inline-flex;gap:8px;align-items:center}
+  .row{display:flex;gap:8px;align-items:center}
+  .toggle{display:inline-flex;align-items:center;gap:6px}
+  .muted{color:var(--muted);font-size:13px}
+  input[type=checkbox]{width:18px;height:18px}
+  /* responsive */
+  @media (max-width:900px){.app{flex-direction:column}.panel{width:100%;order:2}.canvas-wrap{height:60vh}}
+</style>
+</head>
+<body data-theme="light">
+<div class="app">
+  <div class="panel" role="region" aria-label="controls">
+    <h3 class="logo">오프라인 판서 도구</h3>
+    <div class="controls">
+      <div>
+        <label>도구</label>
+        <div class="tool-row" id="tools">
+          <button class="big-btn" data-tool="pen">펜</button>
+          <button class="big-btn" data-tool="rect">사각형</button>
+          <button class="big-btn" data-tool="ellipse">원/타원</button>
+          <button class="big-btn" data-tool="triangle">삼각형</button>
+          <button class="big-btn" data-tool="diamond">마름모</button>
+          <button class="big-btn" data-tool="eraser">지우개</button>
+        </div>
+      </div>
+
+      <div>
+        <label>선 색 / 채움 색 / 투명도</label>
+        <div class="row">
+          <input type="color" id="strokeColor" title="선 색" value="#0b1220">
+          <input type="color" id="fillColor" title="채움 색" value="#06b6d4">
+          <input type="range" id="alpha" min="0" max="1" step="0.01" value="1" style="flex:1">
+        </div>
+        <div class="muted">선 투명도: <span id="alphaVal">1.00</span></div>
+      </div>
+
+      <div>
+        <label>선 굵기</label>
+        <div class="row">
+          <input type="range" id="lineWidth" min="1" max="72" value="4" style="flex:1">
+          <div class="muted" id="lineWidthVal">4px</div>
+        </div>
+      </div>
+
+      <div>
+        <label>옵션</label>
+        <div class="row">
+          <label class="toggle"><input type="checkbox" id="fillToggle" checked> 채움</label>
+          <label class="toggle"><input type="checkbox" id="smoothToggle" checked> 스무스 펜</label>
+        </div>
+      </div>
+
+      <div>
+        <label>작업</label>
+        <div class="tool-row">
+          <button id="undoBtn">Undo</button>
+          <button id="clearBtn">전체 지우기</button>
+          <button id="exportPng">PNG로 저장</button>
+          <button id="exportSvg">SVG로 저장</button>
+          <button id="downloadHtml">HTML로 저장</button>
+        </div>
+      </div>
+
+      <div>
+        <label>다크모드</label>
+        <div class="row">
+          <label class="toggle"><input type="checkbox" id="darkMode"> 다크모드 사용</label>
+        </div>
+      </div>
+
+      <div>
+        <label>도움말 / 단축키</label>
+        <div class="muted">드래그로 그리기 • Esc로 현재 도형 취소 • Z(또는 Ctrl/Cmd+Z)으로 Undo</div>
+      </div>
+
+    </div>
+
+    <div class="footer">
+      <div class="muted">저장된 파일 위치: 브라우저 기본 다운로드 폴더</div>
+    </div>
+  </div>
+
+  <div class="canvas-wrap" role="region" aria-label="drawing canvas">
+    <!-- 두 개의 캔버스: 하나는 최종, 다른 하나는 드래그 프리뷰 -->
+    <canvas id="surface"></canvas>
+    <canvas id="overlay" style="position:absolute;left:0;top:0;pointer-events:none"></canvas>
+  </div>
+</div>
+
+<script>
+(() => {
+  const surface = document.getElementById('surface');
+  const overlay = document.getElementById('overlay');
+  const ctx = surface.getContext('2d');
+  const octx = overlay.getContext('2d');
+
+  function resizeCanvases(){
+    const rect = surface.getBoundingClientRect();
+    [surface,overlay].forEach(c=>{
+      const ratio = window.devicePixelRatio||1;
+      c.width = Math.round(rect.width * ratio);
+      c.height = Math.round(rect.height * ratio);
+      c.style.width = rect.width+'px';
+      c.style.height = rect.height+'px';
+      const g = c.getContext('2d');
+      g.setTransform(ratio,0,0,ratio,0,0);
+    });
+    redrawAll();
+  }
+
+  window.addEventListener('resize', resizeCanvases);
+  setTimeout(resizeCanvases,50);
+
+  // State
+  const toolsEl = document.getElementById('tools');
+  let tool = 'pen';
+  let drawing = false;
+  let start = null;
+  let points = []; // for pen smoothing
+  let history = [];
+
+  const strokeColorEl = document.getElementById('strokeColor');
+  const fillColorEl = document.getElementById('fillColor');
+  const alphaEl = document.getElementById('alpha');
+  const alphaVal = document.getElementById('alphaVal');
+  const lineWidthEl = document.getElementById('lineWidth');
+  const lineWidthVal = document.getElementById('lineWidthVal');
+  const fillToggle = document.getElementById('fillToggle');
+  const smoothToggle = document.getElementById('smoothToggle');
+
+  const undoBtn = document.getElementById('undoBtn');
+  const clearBtn = document.getElementById('clearBtn');
+  const exportPng = document.getElementById('exportPng');
+  const exportSvg = document.getElementById('exportSvg');
+  const downloadHtml = document.getElementById('downloadHtml');
+  const darkModeCheckbox = document.getElementById('darkMode');
+
+  function setActiveTool(t){
+    tool = t;
+    [...toolsEl.querySelectorAll('button')].forEach(b=>b.classList.toggle('active', b.dataset.tool===t));
+    if(tool==='eraser'){
+      overlay.style.cursor = 'crosshair';
+    } else {
+      overlay.style.cursor = 'crosshair';
+    }
+  }
+
+  toolsEl.addEventListener('click', e=>{
+    const b = e.target.closest('button'); if(!b) return;
+    const t = b.dataset.tool; if(!t) return; setActiveTool(t);
+  });
+  setActiveTool('pen');
+
+  alphaEl.addEventListener('input', ()=>{alphaVal.textContent = parseFloat(alphaEl.value).toFixed(2)});
+  lineWidthEl.addEventListener('input', ()=>{lineWidthVal.textContent = lineWidthEl.value+'px'});
+
+  function pushHistory(){
+    try{
+      const data = surface.toDataURL();
+      history.push(data);
+      if(history.length>50) history.shift();
+    }catch(e){console.warn('history failed',e)}
+  }
+
+  undoBtn.addEventListener('click', ()=>{ undo(); });
+  function undo(){
+    if(history.length===0) return clearSurface();
+    history.pop();
+    const last = history[history.length-1];
+    const img = new Image();
+    img.onload = ()=>{ ctx.clearRect(0,0,surface.width,surface.height); ctx.drawImage(img,0,0,surface.width/(window.devicePixelRatio||1), surface.height/(window.devicePixelRatio||1)); };
+    if(last) img.src = last;
+    else { clearSurface(); }
+  }
+
+  clearBtn.addEventListener('click', ()=>{ if(confirm('전체를 지우시겠습니까?')){ pushHistory(); clearSurface(); } });
+  function clearSurface(){ ctx.clearRect(0,0,surface.width,surface.height); }
+
+  function clientPos(e){
+    if(e.touches && e.touches[0]){
+      const t = e.touches[0]; return {x: t.clientX, y: t.clientY};
+    }
+    return {x: e.clientX, y: e.clientY};
+  }
+
+  function toCanvasPos(client){
+    const r = surface.getBoundingClientRect();
+    return {x: client.x - r.left, y: client.y - r.top};
+  }
+
+  function pointerDown(e){
+    if(e.button===2) return; // ignore right-click
+    e.preventDefault();
+    drawing = true;
+    start = toCanvasPos(clientPos(e));
+    points = [start];
+    overlay.style.pointerEvents = 'none';
+  }
+  function pointerMove(e){
+    if(!drawing) return;
+    const pos = toCanvasPos(clientPos(e));
+    if(tool==='pen' || tool==='eraser'){
+      points.push(pos);
+      drawStrokePreview();
+    } else {
+      drawShapePreview(start,pos);
+    }
+  }
+  function pointerUp(e){
+    if(!drawing) return;
+    drawing = false; overlay.style.pointerEvents = 'none';
+    const pos = toCanvasPos(clientPos(e));
+    if(tool==='pen' || tool==='eraser'){
+      pushHistory();
+      commitStroke(points);
+    } else {
+      pushHistory();
+      commitShape(start,pos);
+      octx.clearRect(0,0,overlay.width,overlay.height);
+    }
+    points = [];
+  }
+
+  // attach pointer events
+  ['pointerdown','pointermove','pointerup','pointercancel'].forEach(ev=>{
+    surface.addEventListener(ev, function(e){
+      if(ev==='pointerdown') pointerDown(e);
+      if(ev==='pointermove') pointerMove(e);
+      if(ev==='pointerup' || ev==='pointercancel') pointerUp(e);
+    })
+  });
+  // also allow touch compatibility
+
+  // Drawing helpers
+  function applyCtxSettings(g){
+    g.lineWidth = parseFloat(lineWidthEl.value);
+    g.lineCap = 'round';
+    g.lineJoin = 'round';
+    const a = parseFloat(alphaEl.value);
+    g.globalAlpha = a;
+  }
+
+  function commitStroke(pts){
+    if(pts.length<2) return;
+    const g = ctx;
+    if(tool==='eraser'){
+      g.save();
+      g.globalCompositeOperation = 'destination-out';
+      applyCtxSettings(g);
+      drawSmooth(g, pts);
+      g.restore();
+    } else {
+      g.save();
+      applyCtxSettings(g);
+      g.strokeStyle = strokeColorEl.value;
+      if(smoothToggle.checked) drawSmooth(g, pts);
+      else drawRaw(g, pts);
+      g.restore();
+    }
+  }
+
+  function drawSmooth(g, pts){
+    if(pts.length<2) return;
+    g.beginPath();
+    g.moveTo(pts[0].x, pts[0].y);
+    for(let i=1;i<pts.length-1;i++){
+      const c = pts[i];
+      const next = pts[i+1];
+      const xc = (c.x + next.x)/2;
+      const yc = (c.y + next.y)/2;
+      g.quadraticCurveTo(c.x, c.y, xc, yc);
+    }
+    g.lineTo(pts[pts.length-1].x, pts[pts.length-1].y);
+    g.stroke();
+  }
+  function drawRaw(g, pts){
+    g.beginPath();
+    g.moveTo(pts[0].x, pts[0].y);
+    for(let i=1;i<pts.length;i++) g.lineTo(pts[i].x, pts[i].y);
+    g.stroke();
+  }
+
+  function drawStrokePreview(){
+    octx.clearRect(0,0,overlay.width,overlay.height);
+    octx.save();
+    applyCtxSettings(octx);
+    if(tool==='eraser'){ octx.globalCompositeOperation='destination-out'; octx.lineWidth = lineWidthEl.value; drawSmooth(octx, points); }
+    else { octx.strokeStyle = strokeColorEl.value; drawSmooth(octx, points); }
+    octx.restore();
+  }
+
+  // Shapes
+  function drawShapePreview(s,e){
+    octx.clearRect(0,0,overlay.width,overlay.height);
+    octx.save(); applyCtxSettings(octx);
+    octx.strokeStyle = strokeColorEl.value; octx.fillStyle = fillColorEl.value;
+    const w = e.x - s.x; const h = e.y - s.y;
+    if(tool==='rect'){
+      if(fillToggle.checked) octx.fillRect(s.x,s.y,w,h);
+      octx.strokeRect(s.x,s.y,w,h);
+    } else if(tool==='ellipse'){
+      octx.beginPath(); octx.ellipse(s.x + w/2, s.y + h/2, Math.abs(w)/2, Math.abs(h)/2, 0, 0, Math.PI*2);
+      if(fillToggle.checked) octx.fill(); octx.stroke();
+    } else if(tool==='triangle'){
+      octx.beginPath(); octx.moveTo(s.x + w/2, s.y); octx.lineTo(s.x, s.y + h); octx.lineTo(s.x + w, s.y + h); octx.closePath(); if(fillToggle.checked) octx.fill(); octx.stroke();
+    } else if(tool==='diamond'){
+      const cx = s.x + w/2, cy = s.y + h/2;
+      octx.beginPath(); octx.moveTo(cx, s.y); octx.lineTo(s.x + w, cy); octx.lineTo(cx, s.y + h); octx.lineTo(s.x, cy); octx.closePath(); if(fillToggle.checked) octx.fill(); octx.stroke();
+    }
+    octx.restore();
+  }
+
+  function commitShape(s,e){
+    ctx.save(); applyCtxSettings(ctx);
+    ctx.strokeStyle = strokeColorEl.value; ctx.fillStyle = fillColorEl.value;
+    const w = e.x - s.x; const h = e.y - s.y;
+    if(tool==='rect'){
+      if(fillToggle.checked) ctx.fillRect(s.x,s.y,w,h);
+      ctx.strokeRect(s.x,s.y,w,h);
+    } else if(tool==='ellipse'){
+      ctx.beginPath(); ctx.ellipse(s.x + w/2, s.y + h/2, Math.abs(w)/2, Math.abs(h)/2, 0, 0, Math.PI*2);
+      if(fillToggle.checked) ctx.fill(); ctx.stroke();
+    } else if(tool==='triangle'){
+      ctx.beginPath(); ctx.moveTo(s.x + w/2, s.y); ctx.lineTo(s.x, s.y + h); ctx.lineTo(s.x + w, s.y + h); ctx.closePath(); if(fillToggle.checked) ctx.fill(); ctx.stroke();
+    } else if(tool==='diamond'){
+      const cx = s.x + w/2, cy = s.y + h/2;
+      ctx.beginPath(); ctx.moveTo(cx, s.y); ctx.lineTo(s.x + w, cy); ctx.lineTo(cx, s.y + h); ctx.lineTo(s.x, cy); ctx.closePath(); if(fillToggle.checked) ctx.fill(); ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // Export PNG
+  exportPng.addEventListener('click', ()=>{
+    const link = document.createElement('a');
+    link.download = 'whiteboard.png';
+    link.href = surface.toDataURL('image/png');
+    link.click();
+  });
+
+  // Export SVG (wrap raster PNG inside SVG)
+  exportSvg.addEventListener('click', ()=>{
+    const data = surface.toDataURL('image/png');
+    const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='${surface.width}' height='${surface.height}'><image href='${data}' width='${surface.width}' height='${surface.height}'/></svg>`;
+    const blob = new Blob([svg], {type:'image/svg+xml'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = 'whiteboard.svg'; a.click();
+    URL.revokeObjectURL(url);
+  });
+
+  // Download HTML (save current canvas as a single-file HTML snapshot)
+  downloadHtml.addEventListener('click', ()=>{
+    const png = surface.toDataURL();
+    const doc = `<!doctype html><meta charset="utf-8"><title>snapshot</title><body style="margin:0"><img src="${png}" style="max-width:100%;height:auto"/></body>`;
+    const blob = new Blob([doc],{type:'text/html'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = 'whiteboard-snapshot.html'; a.click();
+    URL.revokeObjectURL(url);
+  });
+
+  // Ctrl/Cmd+Z undo
+  window.addEventListener('keydown', e=>{
+    if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==='z'){ e.preventDefault(); undo(); }
+    if(e.key==='Escape'){ octx.clearRect(0,0,overlay.width,overlay.height); drawing=false; points=[]; }
+  });
+
+  // Dark mode
+  darkModeCheckbox.addEventListener('change', ()=>{
+    document.body.setAttribute('data-theme', darkModeCheckbox.checked ? 'dark' : 'light');
+    // optionally invert canvas background for visual contrast (keeps drawings as-is)
+    if(darkModeCheckbox.checked) surface.style.background='#071028'; else surface.style.background='transparent';
+  });
+
+  // Redraw helper: no retained shapes list, so we rely on history (bitmaps). When resizing, keep last image.
+  function redrawAll(){
+    const last = history[history.length-1];
+    if(last){
+      const img = new Image(); img.onload = ()=>{ ctx.clearRect(0,0,surface.width,surface.height); ctx.drawImage(img,0,0,surface.width/(window.devicePixelRatio||1), surface.height/(window.devicePixelRatio||1)); };
+      img.src = last;
+    } else {
+      ctx.clearRect(0,0,surface.width,surface.height);
+    }
+  }
+
+  // init empty history state
+  pushHistory();
+
+  // initial styling for canvas
+  surface.style.background = 'transparent';
+
+})();
+</script>
+</body>
+</html>
